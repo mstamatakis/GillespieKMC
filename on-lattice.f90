@@ -1,208 +1,6 @@
-module queuing_class
-   implicit none
-   type, public :: queu
-      integer                                    :: nevents
-      real*8,  allocatable, dimension(:)         :: propens,bit
-      integer, allocatable, dimension(:)         :: label
-      integer, allocatable, dimension(:),private :: index   !! rename it
-   contains
-      procedure, public :: initialise_queu
-      procedure, public :: insert
-      procedure, public :: update
-      procedure, public :: remove
-      procedure, public :: get_next_direct_method
-      procedure, public :: get_next_direct_method_BIT !! only in BIT
-      procedure, public :: init_bit                   !! only in BIT
-      procedure, public :: get_next_first_reaction_method
-      procedure, public :: prop_sum
-      procedure, public :: print_all
-   end type
-
-contains
-   subroutine initialise_queu(this,n)
-      implicit none
-      class(queu) :: this
-      integer     :: n
-      
-      this%nevents = 0
-      allocate(this%propens(n))
-      allocate(this%label  (n))
-      allocate(this%index  (n))
-      allocate(this%bit    (n)) !! only for BIT
-   end
-
-   subroutine insert(this,reaction_rate,reaction_type)
-      implicit none
-      class(queu) :: this
-      real*8  :: reaction_rate
-      integer :: reaction_type
-
-      this%nevents               = this%nevents + 1
-      this%propens(this%nevents) = reaction_rate
-      this%label  (this%nevents) = reaction_type
-      this%index(reaction_type)  = this%nevents
-   end
-
-   subroutine update(this,new_reaction_rate,reaction_type)
-      implicit none
-      class(queu) :: this
-      real*8  :: new_reaction_rate, add_value
-      integer :: reaction_type,   i, length
-
-      !================================================================= ONLY IN BIT
-      i = this%index(reaction_type)
-      length = size(this%bit)
-      add_value = new_reaction_rate - this%propens(this%index(reaction_type))
-      do while (i <= length)
-         this%bit(i) = this%bit(i) + add_value
-         i = i + (iand(i,-i))
-      enddo
-      !================================================================= ONLY IN BIT
-      this%propens(this%index(reaction_type))=new_reaction_rate
-
-   end
-   
-   subroutine remove(this,event_to_remove)
-      implicit none
-      class(queu) :: this
-      integer :: event_to_remove
-
-      this%propens(this%index(event_to_remove)) = this%propens(this%nevents) ! removed propensity is replaced by the last one
-      this%propens(this%nevents) = 0.                                        ! duplicate propensity set to zero, NOT REALLY needed
-
-      this%label(this%index(event_to_remove)) = this%label(this%nevents) ! removed label is replaced by the last one
-      this%index(this%label(this%nevents)) = this%index(event_to_remove) ! index of the relocated event type is updated 
-      this%label(this%nevents) = 0                                       ! duplicate label set to zero, NOT REALLY needed
-      
-      this%index(event_to_remove) = 0  ! index of removed event is set to zero, NOT replaced, events are NOT renumbered (should they?)
-      this%nevents = this%nevents - 1
-   end
-
-   subroutine get_next_first_reaction_method(this,dt,reaction_occured)
-      implicit none
-      class (queu) :: this
-      real*8, dimension(this%nevents) :: rand_nums, event_times
-      real*8                          :: dt
-      integer                         :: reaction_occured
-
-      call random_number(rand_nums)                         ! generate the random numbers
-      event_times(:) = -LOG(rand_nums(:)) / this%propens(:) ! generate the random times τ_i
-      call FIND_MIN(event_times, dt, reaction_occured)      ! returns both MIN_VAL and MIN_LOC in one pass
-!~       dt = minval(event_times)                      ! finds smallest time
-!~       reaction_occured = MINLOC(event_times, DIM=1) ! finds the reaction that corresponds to smallest time
-   end
-
-   subroutine get_next_direct_method(this, dt, reaction_occured)
-      implicit none
-      class(queu) :: this
-      real*8      :: a0, r1, r2, dt, r2a0, temp_sum
-      integer     :: i, reaction_occured
-
-      a0 = this%prop_sum()
-      CALL RANDOM_NUMBER(r1)
-      dt = LOG(1/r1) / a0
-      CALL RANDOM_NUMBER(r2)
-      r2a0 = r2 * a0
-      temp_sum=0
-      do i=1, this%nevents
-         temp_sum = temp_sum + this%propens(i)
-         if (temp_sum > r2a0) then
-            reaction_occured = this%label(i)
-            exit
-         endif
-      enddo
-   end
-
-   subroutine get_next_direct_method_BIT(this, dt, reaction_occured)    !! only in BIT
-      implicit none
-      class(queu) :: this
-      real*8      :: a0, r1, r2, dt, r2a0, temp_sum
-      integer     :: i, reaction_occured
-      a0 = this%prop_sum()
-      CALL RANDOM_NUMBER(r1)
-      dt = LOG(1/r1) / a0
-      CALL RANDOM_NUMBER(r2)
-      r2a0 = r2 * a0 !! this is the sum I need to find
-      i = 0       !! could use "reaction_occured" directly
-      temp_sum=0
-!~       print*, this%bit
-!~       print*, r2a0, a0
-      do while(temp_sum < r2a0)
-         i = i + 1
-         call get_sum_up_to_element(this, i, temp_sum)
-      enddo
-      reaction_occured = i
-!~       print*, i, char(10), "============================================"
-   end
-
-   subroutine get_sum_up_to_element(this, indx, sum_up_to)       !! only in BIT
-      implicit none
-      class(queu) :: this
-      integer :: i, indx
-      real*8  :: sum_up_to
-      i = indx
-      sum_up_to = 0
-      do while(i>0)
-         sum_up_to = sum_up_to + this%bit(i)
-         i = i - (iand(i,-i))
-      enddo
-   end
-
-   subroutine init_bit(this) !! only in BIT
-      implicit none
-      class(queu) :: this
-      integer :: length, i, j
-      length = size(this%bit)
-      do i=1,length
-         j=i
-         do while(j <= length)
-            this%bit(j) = this%bit(j) + this%propens(i)
-            j = j + (iand(j,-j))
-         enddo
-      enddo
-!~       print*,"BIT = ", this%bit, CHAR(10)
-!~       print*,"PROP= ", this%propens
-   end
-
-   function prop_sum(this)
-      implicit none
-      class(queu) :: this
-      real*8      :: prop_sum
-      prop_sum = 0
-      prop_sum = sum(this%propens(1:this%nevents))
-   end
-
-   subroutine print_all(this)
-      implicit none
-      class(queu) :: this
-      print*, "events", this%nevents !, CHAR(10) !to enter a newline character
-      print*, "propen", this%propens
-      print*, "labels", this%label
-      print*, "index ", this%index
-      print*, "------------------------------------------------------------------------"
-   end
-   
-   subroutine FIND_MIN(array, min_val, min_loc)
-      implicit none
-      real*8, dimension(:) :: array
-      real*8               :: min_val
-      integer              :: min_loc, length, i
-
-      length = size(array)
-      min_val = array(1)
-      min_loc = 1
-      do i=2,length
-         if ( array(i) < min_val ) then
-            min_val = array(i)
-            min_loc = i
-         endif
-      enddo
-   end
-   
-end module queuing_class
-
 module lattice_KMC
-   use queuing_class
+   use partial_sums
+   use execution_queue
    implicit none
    integer                               :: Ns, c, empty, occupied
    integer,  allocatable, dimension(:)   :: reaction_effect
@@ -212,10 +10,11 @@ module lattice_KMC
    integer*8,allocatable, dimension(:)   :: h
 
 contains
-   subroutine init(qu,n,percentage)
+   subroutine init(queue_struct,n,percentage)
       implicit none
-      type(queu) :: qu
-      integer :: n, i
+!~       type(PropensPartialSums_Type) :: queue_struct
+      type(ProcessQueue_Type) ::  queue_struct
+      integer :: n!, i
       real*8  :: percentage
 
       Ns = n*n ! total number of sites
@@ -225,35 +24,30 @@ contains
       allocate(neighbours(Ns,4))
       allocate(propensities(Ns,6))
       
-      call qu%initialise_queu(6*Ns)
+      call queue_struct%initialize(6*Ns)
       call find_coords(n)
       call find_neighbours(n)
       call randomize_coverage(percentage)
 
-      ! ALL events are inserted in the queu, even those with zero propensity
-      do i=1, Ns  ! signature: insert(propensity, event-type / event-identifier)
-         call qu%insert(propensities(i,1),  6*i-5) ! diffusion North
-         call qu%insert(propensities(i,2),  6*i-4) ! diffusion South
-         call qu%insert(propensities(i,3),  6*i-3) ! diffusion East
-         call qu%insert(propensities(i,4),  6*i-2) ! diffusion West
-         call qu%insert(propensities(i,5),  6*i-1) ! desorption
-         call qu%insert(propensities(i,6),  6*i  ) ! adsorption 
-      enddo
-      call qu%init_bit()                                                !! only in BIT
+!~       call insert_events_to_sums_tree(queue_struct)!using sums tree
+      call insert_events_to_heap(queue_struct)! using binary heap
+      print*, queue_struct%heap_elements, char(10),char(10)
+!~       print*, queue_struct%heap_labels 
    end
 
-   subroutine execute_reaction(qu,reaction_occured)
+   subroutine execute_reaction(queue_struct,reaction_occured,t_kmc)
       implicit none
-      type(queu) :: qu
-      integer    :: reaction_occured, site_or, site_des, r_type,i,j ! site of origin & destination
-!~       real*8     :: des_const, ad_const
+!~       type(PropensPartialSums_Type) :: queue_struct
+      type(ProcessQueue_Type) ::  queue_struct
+      real*8     :: t_kmc
+      integer    :: reaction_occured, site_or, site_des, r_type!,i,j ! site of origin & destination
 
       !specify which site is affected and the reaction_type (diff,des,ads)
       site_or = int((reaction_occured-1)/6) + 1 ! ∈ [1, Ns]
       r_type  = mod( reaction_occured-1, 6) + 1 ! ∈ [1,  6]
 
       ! find the destination site and update the state of the lattice
-      ! update matrix of propensites that lattice_KMC "sees" AND do the checks, then pass changes to QUEU
+      ! update matrix of propensites that lattice_KMC "sees" AND do the checks
       select case(r_type)
          case(1:4)! diffusions
             site_des = neighbours(site_or,r_type) ! neighbour according to reaction_type
@@ -283,22 +77,84 @@ contains
             propensities(site_or, r_type  ) = 0. _8  ! ADsorption is disabled
       end select
 
-      ! update QUEU of events according to NEW positions/propensities
-      ! signature: update(new_reaction_rate, reaction_type)
+      ! update queuing structure (tree or heap) according to NEW positions/propensities
+!~       call update_sums_tree(queue_struct, site_or, site_des)
+      call update_heap(queue_struct, site_or, site_des,t_kmc)
+!~       print*, queue_struct%heap_elements, char(10)
+   end
+
+!----------------------- Internally Used Subroutines ----------------------
+   subroutine insert_events_to_sums_tree(queue_struct)
+      implicit none
+      type(PropensPartialSums_Type) :: queue_struct
+      integer :: i
+      ! ALL events are inserted in the tree, even those with zero propensity
+      do i=1, Ns ! insert(inserted_element,inserted_details_in (OPTIONAL) )
+         call queue_struct%insert(propensities(i,1)) ! diffusion North
+         call queue_struct%insert(propensities(i,2)) ! diffusion South
+         call queue_struct%insert(propensities(i,3)) ! diffusion East
+         call queue_struct%insert(propensities(i,4)) ! diffusion West
+         call queue_struct%insert(propensities(i,5)) ! desorption
+         call queue_struct%insert(propensities(i,6)) ! adsorption 
+      enddo
+   end
+
+   subroutine update_sums_tree(queue_struct, site_or, site_des)
+      implicit none
+      type(PropensPartialSums_Type) :: queue_struct
+      integer :: i,j, site_or, site_des
+      ! update(updated_element_label,updated_element_value,updated_element_details (OPTIONAL))
       do i=1,4
-         call qu%update( propensities(site_or,  i), (site_or -1)*6 + i )
-         call qu%update( propensities(site_des, i), (site_des-1)*6 + i )
+         call queue_struct%update((site_or -1)*6 + i, propensities(site_or, i))
+         call queue_struct%update((site_des-1)*6 + i, propensities(site_des,i))
          do j=1,4
-            call qu%update( propensities(neighbours(site_or, j), i), (neighbours(site_or, j)-1)*6 + i )
-            call qu%update( propensities(neighbours(site_des,j), i), (neighbours(site_des,j)-1)*6 + i )
+            call queue_struct%update((neighbours(site_or, j)-1)*6+i, propensities(neighbours(site_or, j),i) )
+            call queue_struct%update((neighbours(site_des,j)-1)*6+i, propensities(neighbours(site_des,j),i) )
          enddo
       enddo
       do i=5,6
-         call qu%update( propensities(site_or,  i), (site_or -1)*6 + i )
-         call qu%update( propensities(site_des, i), (site_des-1)*6 + i )
+         call queue_struct%update((site_or -1)*6+i, propensities(site_or, i) )
+         call queue_struct%update((site_des-1)*6+i, propensities(site_des,i) )
       enddo
-! have also to update the involved neighbours of the sites:
-! 4 if AD or DES occurs, 6 if diffusion occurs.
+
+   end
+
+   subroutine insert_events_to_heap(queue_struct)
+      implicit none
+      type(ProcessQueue_Type) ::  queue_struct
+      real*8, dimension(6) :: rand_nums
+      integer :: i,j
+      ! binary heap stores the occurence times of the events.
+      do i=1, Ns ! insert(inserted_element,inserted_details_in (OPTIONAL) )
+         call random_number(rand_nums)
+         do j=1,6
+            call queue_struct%insert(-LOG(rand_nums(j)) / propensities(i,j))
+         enddo
+      enddo
+   end
+
+   subroutine update_heap(queue_struct,site_or, site_des, t_kmc)
+      implicit none
+      type(ProcessQueue_Type) ::  queue_struct
+      real*8, dimension(-1:9,4) :: rand_nums
+      real*8  :: t_kmc
+      integer :: i,j, site_or, site_des
+      call random_number(rand_nums)
+      do i=1,4 ! update origin & destination propensities 
+         call queue_struct%update((site_or -1)*6 + i, t_kmc - LOG(rand_nums(-1,i)) / propensities(site_or, i))
+         call queue_struct%update((site_des-1)*6 + i, t_kmc - LOG(rand_nums( 0,i)) / propensities(site_des,i))
+         do j=1,4 ! update neighbours of origin & destination sites
+            call queue_struct%update((neighbours(site_or, j)-1)*6+i, &
+            t_kmc - LOG(rand_nums(2*j-1,i)) / propensities(neighbours(site_or, j),i) )
+            call queue_struct%update((neighbours(site_des,j)-1)*6+i, &
+            t_kmc - LOG(rand_nums(2*j  ,i)) / propensities(neighbours(site_des,j),i) )
+         enddo
+      enddo
+      do i=5,6 ! update AD & DES propensities of origin and destination sites
+         j = i-4 ! j=1,2
+         call queue_struct%update((site_or -1)*6+i, t_kmc - LOG(rand_nums(9, 2*j-1)) / propensities(site_or, i) ) ! rands = (9,1) (9,3)
+         call queue_struct%update((site_des-1)*6+i, t_kmc - LOG(rand_nums(9, 2*j  )) / propensities(site_des,i) ) ! rands = (9,2) (9,4)
+      enddo
    end
 
    subroutine check_permitted_diffusions(site_of_interest)
@@ -412,45 +268,43 @@ contains
    end
 
 end
-
-program on_lattice
-   use queuing_class
+! =========================================================================================
+program on_lattice_MAIN
    use lattice_KMC
    implicit none
-   type(queu) :: qu
-   character(len=20) :: read_file
+!~    type(PropensPartialSums_Type) :: queue_struct
+   type(ProcessQueue_Type) ::  queue_struct
+   
    character(len=20) :: write_file
-   real*8    :: t, dt, t1, t2, cov, ts, tf!, r1, r2
+   real*8    :: t_kmc, t, dt, t1, t2, cov, ts, tf
    integer   :: i, j, iters, reaction_occured, Ldim
    call cpu_time(ts) !-----------------global start time----------------
-   read_file= 'init.txt'
    write_file= 'lattice.txt'
-   Ldim = 20
+   write(*,*) 'Give lattice Dimension and # of iterations:'
+   read*, Ldim, iters
+!~    Ldim = 100
+!~    iters = 20
    cov = 0.00 ! fractional lattice coverage: cov ∈ [0, 1]
-   call init(qu,Ldim,cov)
-   t=0
-   iters = 10
+   call init(queue_struct,Ldim,cov)
+   t_kmc = 0
    reaction_occured=-1
-   print*,"START:", reaction_occured, "a0 = ", qu%prop_sum()
+!~    print*,"START:", reaction_occured, "a0 = ", queue_struct%tree_elements(queue_struct%head_node_indx)
+   print*,"START:", reaction_occured ! a0 does not exist in Binary Heap
    open(unit=88,file=write_file)
    do j=1, Ldim
       write(88,*) lattice(j,:)
    enddo
    do i=1, iters
+!~       call find_using_sums_tree(queue_struct,dt, reaction_occured)
+!~       t = t + dt
+      call find_using_execution_queue(queue_struct,t_kmc, reaction_occured)
+      
+      print*,i, t_kmc, reaction_occured!, char(10)
       call cpu_time(t1)
-!~       call qu%get_next_first_reaction_method(dt,reaction_occured)
-      call qu%get_next_direct_method(dt, reaction_occured)
-!~       call qu%get_next_direct_method_BIT(dt, reaction_occured)
-      call cpu_time(t2)
-!~       print*,"time to FIND next reaction: ",t2-t1,i,iters
-      t = t + dt
-
-!~       print*,"BEFORE:",reaction_occured, qu%prop_sum()
-      call cpu_time(t1)
-      call execute_reaction(qu,reaction_occured)
+      call execute_reaction(queue_struct,reaction_occured,t_kmc)
       call cpu_time(t2)
 !~       print*,"time to EXEC next reaction: ",t2-t1
-!~       print*,"AFTER:",reaction_occured, qu%prop_sum()
+!~       print*,"a0 AFTER reaction execution:",reaction_occured, queue_struct%tree_elements(sums_tree%head_node_indx)
 !~       if (mod(i,5000)==0) then
          do j=1, Ldim
             write(88,*) lattice(j,:)
@@ -459,4 +313,36 @@ program on_lattice
    enddo
    call cpu_time(tf) !-----------------global finish time---------------
    print*,"Total time: ",tf-ts, " seconds"
+   
+contains
+
+   subroutine find_using_sums_tree(queue_struct, dt, reaction_occured)
+      implicit none
+      type(PropensPartialSums_Type) :: queue_struct
+      integer :: reaction_occured
+      real*8 :: dt, r1, r2, a0, r2a0, t1, t2 
+      
+      CALL RANDOM_NUMBER(r1)
+      CALL RANDOM_NUMBER(r2)
+      a0 = queue_struct%tree_elements(queue_struct%head_node_indx)
+      dt = -LOG(r1) / a0
+      r2a0 = r2 * a0
+      
+      call cpu_time(t1)
+      reaction_occured = queue_struct%first_greater(r2a0)
+      call cpu_time(t2)
+      print*,"time to FIND next reaction: ",t2-t1
+      print*,"a0 of the current lattice state:",queue_struct%tree_elements(queue_struct%head_node_indx)
+      print*,"reaction chosen:",reaction_occured
+   end
+
+   subroutine find_using_execution_queue(queue_struct,t_kmc,reaction_occured)
+      implicit none
+      type(ProcessQueue_Type) ::  queue_struct
+      integer :: reaction_occured
+      real*8  :: t_kmc
+      t_kmc            = queue_struct%heap_elements(1)
+      reaction_occured = queue_struct%heap_labels(1)
+   end
+
 end
