@@ -1,4 +1,6 @@
-build
+*.o
+*.mod
+*.x
 Debug
 Release
 .DS_Store
