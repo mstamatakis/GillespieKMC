@@ -13,7 +13,7 @@ contains
    subroutine init(queue_struct,n,percentage)
       implicit none
 !~       type(PropensPartialSums_Type) :: queue_struct
-      type(ProcessQueue_Type) ::  queue_struct
+      class(ProcessQueue_Type) ::  queue_struct
       integer :: n!, i
       real*8  :: percentage
 
@@ -38,7 +38,7 @@ contains
    subroutine execute_reaction(queue_struct,reaction_occured,t_kmc)
       implicit none
 !~       type(PropensPartialSums_Type) :: queue_struct
-      type(ProcessQueue_Type) ::  queue_struct
+      class(ProcessQueue_Type) ::  queue_struct
       real*8     :: t_kmc
       integer    :: reaction_occured, site_or, site_des, r_type!,i,j ! site of origin & destination
 
@@ -121,7 +121,7 @@ contains
 
    subroutine insert_events_to_heap(queue_struct)
       implicit none
-      type(ProcessQueue_Type) ::  queue_struct
+      class(ProcessQueue_Type) ::  queue_struct
       real*8, dimension(6) :: rand_nums
       integer :: i,j
       ! binary heap stores the occurence times of the events.
@@ -135,7 +135,7 @@ contains
 
    subroutine update_heap(queue_struct,site_or, site_des, t_kmc)
       implicit none
-      type(ProcessQueue_Type) ::  queue_struct
+      class(ProcessQueue_Type) ::  queue_struct
       real*8, dimension(-1:9,4) :: rand_nums
       real*8  :: t_kmc
       integer :: i,j, site_or, site_des
@@ -271,9 +271,11 @@ end
 ! =========================================================================================
 program on_lattice_MAIN
    use lattice_KMC
+   use execution_queue
+   use execution_queue_binary_heap
    implicit none
 !~    type(PropensPartialSums_Type) :: queue_struct
-   type(ProcessQueue_Type) ::  queue_struct
+   class(ProcessQueue_Type), allocatable ::  queue_struct
    
    character(len=20) :: write_file
    real*8    :: t_kmc, t, dt, t1, t2, cov, ts, tf
@@ -285,6 +287,19 @@ program on_lattice_MAIN
 !~    Ldim = 100
 !~    iters = 20
    cov = 0.00 ! fractional lattice coverage: cov ∈ [0, 1]
+   write(*,*) 'Which queuing system you want to use? 1 for linear vector, 2 for binary heap:'
+   read*, i
+   
+   select case (i)
+   case (1)
+       allocate(queue_struct)
+   case (2)
+       allocate(ProcessQueueBinaryHeap_Type::queue_struct)
+   case default
+       write(*,*) 'Invalid selection'
+       stop
+   end select
+   
    call init(queue_struct,Ldim,cov)
    t_kmc = 0
    reaction_occured=-1
@@ -338,7 +353,7 @@ contains
 
    subroutine find_using_execution_queue(queue_struct,t_kmc,reaction_occured)
       implicit none
-      type(ProcessQueue_Type) ::  queue_struct
+      class(ProcessQueue_Type) ::  queue_struct
       integer :: reaction_occured
       real*8  :: t_kmc
       reaction_occured = queue_struct%highest_priority_label()
