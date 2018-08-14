@@ -31,7 +31,7 @@ contains
 
 !~       call insert_events_to_sums_tree(queue_struct)!using sums tree
       call insert_events_to_heap(queue_struct)! using binary heap
-      print*, queue_struct%queue_elements, char(10),char(10)
+!      print*, queue_struct%queue_elements, char(10),char(10)
 !~       print*, queue_struct%heap_labels 
    end
 
@@ -313,18 +313,20 @@ program on_lattice_MAIN
 !~       call find_using_sums_tree(queue_struct,dt, reaction_occured)
 !~       t = t + dt
       call find_using_execution_queue(queue_struct,t_kmc, reaction_occured)
-      
-      print*,i, t_kmc, reaction_occured!, char(10)
+
+      if (mod(i,1000) == 0) then
+          print*,i, t_kmc, reaction_occured!, char(10)
+      endif
       call cpu_time(t1)
       call execute_reaction(queue_struct,reaction_occured,t_kmc)
       call cpu_time(t2)
 !~       print*,"time to EXEC next reaction: ",t2-t1
 !~       print*,"a0 AFTER reaction execution:",reaction_occured, queue_struct%tree_elements(sums_tree%head_node_indx)
-!~       if (mod(i,5000)==0) then
+       if (mod(i,5000)==0) then
          do j=1, Ldim
             write(88,*) lattice(j,:)
          enddo
-!~       endif
+       endif
    enddo
    call cpu_time(tf) !-----------------global finish time---------------
    print*,"Total time: ",tf-ts, " seconds"
