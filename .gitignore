@@ -1,6 +1,8 @@
 *.o
 *.mod
 *.x
+*.m
+*.geany
 Debug
 Release
 .DS_Store

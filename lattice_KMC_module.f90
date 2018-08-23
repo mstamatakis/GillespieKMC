@@ -8,6 +8,8 @@ module lattice_KMC
    real*8,   allocatable, dimension(:)   :: reaction_const
    real*8,   allocatable, dimension(:,:) :: propensities
    integer*8,allocatable, dimension(:)   :: h
+   real*8                                :: ads_const  = 5., des_const= 5.
+   real*8                                :: diff_const = 20.
 
 contains
    subroutine init(queue_struct,n,percentage)
@@ -54,27 +56,27 @@ contains
             lattice(coords(site_or, 1), coords(site_or, 2)) = 0 ! change state of ORIGIN site
             lattice(coords(site_des,1), coords(site_des,2)) = 1 ! change state of DESTINATION site
             !----------------ORIGIN SITE-----------------------------------------------------------
-            propensities(site_or, 1:4) = 0.0_8 ! further diffusions are disabled
-            propensities(site_or, 5  ) = 0.0_8 ! DEsorption is  disabled
-            propensities(site_or, 6  ) = 1.0_8 ! ADsorption is   enabled
+            propensities(site_or, 1:4) = 0.0_8     ! further diffusions are disabled
+            propensities(site_or, 5  ) = 0.0_8     ! DEsorption is  disabled
+            propensities(site_or, 6  ) = ads_const ! ADsorption is   enabled
             call enable_diffusions(site_or)    ! diffusion BACK is permitted by default but needs special treatment
             !----------------DESTINATION SITE------------------------------------------------------
-            propensities(site_des, 5 ) = 1.0_8 ! DEsorption is  enabled
-            propensities(site_des, 6 ) = 0.0_8 ! ADsorption is disabled
+            propensities(site_des, 5 ) = des_const ! DEsorption is  enabled
+            propensities(site_des, 6 ) = 0.0_8     ! ADsorption is disabled
             call check_permitted_diffusions(site_des)
          case(5)! DEsorption
             site_des = site_or !! needed
             lattice(coords(site_or, 1), coords(site_or, 2)) = 0 ! change state of ORIGIN site
-            propensities(site_or, 1:4     ) = 0.0_8 ! diffusions are disabled
-            propensities(site_or, r_type  ) = 0.0_8 ! DEsorption is  disabled
-            propensities(site_or, r_type+1) = 1.0_8 ! ADsorption is   enabled
+            propensities(site_or, 1:4     ) = 0.0_8     ! diffusions are disabled
+            propensities(site_or, r_type  ) = 0.0_8     ! DEsorption is  disabled
+            propensities(site_or, r_type+1) = ads_const ! ADsorption is   enabled
             call enable_diffusions(site_or)!diffusion of the neighbours to the empty site HAS TO BE enabled
          case(6)! ADsorption
             site_des = site_or !! needed
             lattice(coords(site_or, 1), coords(site_or, 2)) = 1
             call check_permitted_diffusions(site_or) ! OK
-            propensities(site_or, r_type-1) = 1.0_8  ! DEsorption is  enabled
-            propensities(site_or, r_type  ) = 0.0_8  ! ADsorption is disabled
+            propensities(site_or, r_type-1) = des_const ! DEsorption is  enabled
+            propensities(site_or, r_type  ) = 0.0_8     ! ADsorption is disabled
       end select
 
       ! update queuing structure (tree or heap) according to NEW positions/propensities
@@ -169,7 +171,7 @@ contains
 !~          print*,neighbour,lattice(row,col),mir(i),propensities(site_of_interest,i),propensities(neighbour,mir(i))
 !~          if(lattice( coords(neighbours(site_of_interest,i),1),coords(neighbours(site_of_interest,i),2) ) == 0) then
          if (lattice(row, col)==0) then
-            propensities(site_of_interest,i) = 5.0_8
+            propensities(site_of_interest,i) = diff_const
          else ! if lattice site is already occupied
             propensities(site_of_interest,i) = 0.0_8
             ! need to disable mirrored reaction, 1-2, 2-1, 3-4, 4-3
@@ -188,7 +190,7 @@ contains
          row = coords(neighbour,1)
          col = coords(neighbour,2)
          if (lattice(row, col)==1) then
-            propensities(neighbour,mir(i))=5.0_8
+            propensities(neighbour,mir(i)) = diff_const
          endif
       enddo
    end
@@ -245,8 +247,8 @@ contains
       
       ! initialize an empty lattice, only adsorption can occur
       lattice = 0
-      propensities(:, 1:5) = 0.0_8 ! diffusions + DEsorption
-      propensities(:, 6  ) = 1.0_8 ! ADsorption
+      propensities(:, 1:5) = 0.0_8     ! diffusions + DEsorption
+      propensities(:, 6  ) = ads_const ! ADsorption
       if ( covrg > 0. ) then
          do i=1, Ns ! fill shuffled array
             call random_number(randN)
@@ -261,105 +263,10 @@ contains
 !~             print*,"Site Occupied: ", site
             lattice(coords(site,1), coords(site,2)) = 1
             call check_permitted_diffusions(site)
-            propensities(site, 5) = 1.0_8 ! DEsorption is  enabled
-            propensities(site, 6) = 0.0_8 ! ADsorption is disabled
+            propensities(site, 5) = des_const ! DEsorption is  enabled
+            propensities(site, 6) = 0.0_8     ! ADsorption is disabled
          enddo
       endif
    end
 
-end
-! =========================================================================================
-program on_lattice_MAIN
-   use lattice_KMC
-   use execution_queue
-   use execution_queue_binary_heap
-   implicit none
-!~    type(PropensPartialSums_Type) :: queue_struct
-   class(ProcessQueue_Type), allocatable ::  queue_struct
-   
-   character(len=20) :: write_file
-   real*8    :: t_kmc, t, dt, t1, t2, cov, ts, tf
-   integer   :: i, j, iters, reaction_occured, Ldim
-   call cpu_time(ts) !-----------------global start time----------------
-   write_file= 'lattice.txt'
-   write(*,*) 'Give lattice Dimension and # of iterations:'
-   read*, Ldim, iters
-!~    Ldim = 100
-!~    iters = 20
-   cov = 0.00 ! fractional lattice coverage: cov ∈ [0, 1]
-   write(*,*) 'Which queuing system you want to use? 1 for linear vector, 2 for binary heap:'
-   read*, i
-   
-   select case (i)
-   case (1)
-       allocate(queue_struct)
-   case (2)
-       allocate(ProcessQueueBinaryHeap_Type::queue_struct)
-   case default
-       write(*,*) 'Invalid selection'
-       stop
-   end select
-   
-   call init(queue_struct,Ldim,cov)
-   t_kmc = 0
-   reaction_occured=-1
-!~    print*,"START:", reaction_occured, "a0 = ", queue_struct%tree_elements(queue_struct%head_node_indx)
-   print*,"START:", reaction_occured ! a0 does not exist in Binary Heap
-   open(unit=88,file=write_file)
-   do j=1, Ldim
-      write(88,*) lattice(j,:)
-   enddo
-   do i=1, iters
-!~       call find_using_sums_tree(queue_struct,dt, reaction_occured)
-!~       t = t + dt
-      call find_using_execution_queue(queue_struct,t_kmc, reaction_occured)
-
-      if (mod(i,1000) == 0) then
-          print*,i, t_kmc, reaction_occured!, char(10)
-      endif
-      call cpu_time(t1)
-      call execute_reaction(queue_struct,reaction_occured,t_kmc)
-      call cpu_time(t2)
-!~       print*,"time to EXEC next reaction: ",t2-t1
-!~       print*,"a0 AFTER reaction execution:",reaction_occured, queue_struct%tree_elements(sums_tree%head_node_indx)
-       if (mod(i,5000)==0) then
-         do j=1, Ldim
-            write(88,*) lattice(j,:)
-         enddo
-       endif
-   enddo
-   call cpu_time(tf) !-----------------global finish time---------------
-   print*,"Total time: ",tf-ts, " seconds"
-   
-contains
-
-   !subroutine find_using_sums_tree(queue_struct, dt, reaction_occured)
-   !   implicit none
-   !   type(PropensPartialSums_Type) :: queue_struct
-   !   integer :: reaction_occured
-   !   real*8 :: dt, r1, r2, a0, r2a0, t1, t2 
-   !   
-   !   CALL RANDOM_NUMBER(r1)
-   !   CALL RANDOM_NUMBER(r2)
-   !   a0 = queue_struct%tree_elements(queue_struct%head_node_indx)
-   !   dt = -LOG(r1) / a0
-   !   r2a0 = r2 * a0
-   !   
-   !   call cpu_time(t1)
-   !   reaction_occured = queue_struct%first_greater(r2a0)
-   !   call cpu_time(t2)
-   !   print*,"time to FIND next reaction: ",t2-t1
-   !   print*,"a0 of the current lattice state:",queue_struct%tree_elements(queue_struct%head_node_indx)
-   !   print*,"reaction chosen:",reaction_occured
-   !end
-
-   subroutine find_using_execution_queue(queue_struct,t_kmc,reaction_occured)
-      implicit none
-      class(ProcessQueue_Type) ::  queue_struct
-      integer :: reaction_occured
-      real*8  :: t_kmc
-      reaction_occured = queue_struct%highest_priority_label()
-      t_kmc            = queue_struct%key_value_of(reaction_occured)
-   end
-
-end
+end module lattice_KMC
