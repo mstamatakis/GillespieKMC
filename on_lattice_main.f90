@@ -8,7 +8,8 @@ program on_lattice_MAIN
    
    character(len=20) :: write_file
    real*8    :: t_kmc, t, dt, t1, t2, cov, ts, tf
-   integer   :: i, j, iters, reaction_occured, Ldim
+   integer   :: i, j, iters, reaction_occured, Ldim, seed(33)=999
+   call random_seed(PUT=seed) ! seed is fixed, every run produces the same random number sequence
    call cpu_time(ts) !-----------------global start time----------------
    write_file= 'lattice.txt'
    write(*,*) 'Give lattice Dimension and # of iterations:'
