@@ -13,8 +13,7 @@ module execution_queue_binary_heap
 !! Finally, "array_indexes" is the inverse mapping of heap_labels, showing
 !! each element's position in the array that stores the elements of the heap.
 
-use parser_module, only: int2str
-use process_details_module
+use parser_module, only: int2str, remove_leading_blanks, striccompare
 use execution_queue
 
 implicit none
@@ -25,31 +24,32 @@ private
 public :: ProcessQueueBinaryHeap_Type
 
 type, extends(ProcessQueue_Type) :: ProcessQueueBinaryHeap_Type
-	! queue_elements is inherited from ProcessQueue_Type. It stores key values of these elements 
+   ! queue_elements is inherited from ProcessQueue_Type. It stores key values of these elements 
     ! (occurrence times of elementary processes in KMC)
     ! To get the time of occurrence for elementary process ilabel, 
     ! we evaluate: queue_elements(array_indexes(ilabel))
-	integer, dimension(:), allocatable, public :: heap_labels ! labels of these elements (elementary process indexes)
+   integer, dimension(:), allocatable, public :: heap_labels ! labels of these elements (elementary process indexes)
     ! queue_details is inherited from ProcessQueue_Type. It stores elementary process details 
     ! (type defined in process_details_module so the user can put whatever information they want there).
     ! To get the details for lattice provess ilabel, we evaluate: queue_details(ilabel)
-	integer, dimension(:), allocatable, private :: array_indexes ! inverse mapping of labels, to be used privately in the class
+   integer, dimension(:), allocatable, public :: array_indexes ! inverse mapping of labels, to be used privately in the class
     contains
-	  procedure, public :: initialize => heap_initialize
-	  procedure, public :: populate => heap_populate
+     procedure, public :: initialize => heap_initialize
+     procedure, public :: populate => heap_populate
       procedure, private :: fullsort => heap_fullsort
-	  ! elements are referenced by their labels in the following functions ->
-	  procedure, public :: update => heap_update_element
-	  procedure, public :: remove => heap_remove_element
-	  procedure, public :: insert => heap_insert_element
-	  procedure, public :: insert_explicit => heap_insert_element_with_explicit_label
-	  procedure, public :: details_of => heap_get_details_of_element
-	  procedure, public :: key_value_of => heap_get_key_value_of_element
-	  procedure, public :: highest_priority_label => heap_get_label_of_highest_priority_element
+     ! elements are referenced by their labels in the following functions ->
+     procedure, public :: update => heap_update_element
+     procedure, public :: remove => heap_remove_element
+     procedure, public :: insert => heap_insert_element
+     procedure, public :: insert_explicit => heap_insert_element_with_explicit_label
+     procedure, public :: key_value_of => heap_get_key_value_of_element
+     procedure, public :: highest_priority_label => heap_get_label_of_highest_priority_element
       procedure, private :: relabel => heap_relabel
-	  ! <- elements are referenced by their labels in preceding functions
-	  procedure, public :: check_status => heap_check_status
-	  procedure, private :: error => heap_error
+     ! <- elements are referenced by their labels in preceding functions
+     procedure, public :: check_status => heap_check_status
+     procedure, private :: error => heap_error
+      procedure, public :: save_restart_info => heap_save_restart_info
+      procedure, public :: load_restart_info => heap_load_restart_info
 end type
 
 contains
@@ -72,9 +72,6 @@ this%queue_elements(n0) = d_QNaN
 allocate(this%heap_labels(n0))
 this%heap_labels = 0
 
-allocate(this%queue_details(n0))
-this%queue_details = nullProcessDetails()
-
 allocate(this%array_indexes(n0))
 this%array_indexes = 0
 
@@ -84,50 +81,39 @@ end subroutine heap_initialize
 
 !@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 
-subroutine heap_populate(this,values,labels,details_in)
+subroutine heap_populate(this,values,labels)
 
 implicit none
 
 class(ProcessQueueBinaryHeap_Type), intent(inout) :: this
 real(8), intent(in) :: values(:)
 integer, intent(in) :: labels(:)
-type(QProcessDetails_Type), optional :: details_in(:)
 
 integer i, j, n_process
-type(QProcessDetails_Type) :: details(size(values))
 
 if (size(values) > size(this%queue_elements)) then
-	call this%error(888014,'Occurred when trying to populate a heap of size ' // &
-	trim(int2str(size(this%queue_elements))) // ' with ' // trim(int2str(size(values))) // &
-	' elements.')
+   call this%error(888014,'Occurred when trying to populate a heap of size ' // &
+   trim(int2str(size(this%queue_elements))) // ' with ' // trim(int2str(size(values))) // &
+   ' elements.')
 endif
 
 if (size(values) /= size(labels)) then
-	call this%error(888001)
+   call this%error(888001)
 end if
 
-if (present(details_in)) then
-	if (size(values) /= size(details_in)) then
-		call this%error(888002)
-	end if
-	details = details_in
-else
-	details = nullProcessDetails()
-endif
-
 if (minval(labels) < 1) then
-	call this%error(888003,'A label is lower than one.')
+   call this%error(888003,'A label is lower than one.')
 elseif (maxval(labels) > size(labels)) then
-	call this%error(888003,'A label is higher than size(values).')
+   call this%error(888003,'A label is higher than size(values).')
 else
-	do i = 1,size(labels)
-		do j = i+1,size(labels)
-			if (labels(i) == labels(j)) then
-				call this%error(888003,'Value ' // &
-				trim(int2str(labels(i))) // ' repeats.')
-			endif
-		enddo
-	enddo
+   do i = 1,size(labels)
+      do j = i+1,size(labels)
+         if (labels(i) == labels(j)) then
+            call this%error(888003,'Value ' // &
+            trim(int2str(labels(i))) // ' repeats.')
+         endif
+      enddo
+   enddo
 endif
 
 this%nsize = size(values)
@@ -135,13 +121,6 @@ do i = 1,this%nsize
     this%queue_elements(i) = values(i)
     this%heap_labels(i) = labels(i)
     this%array_indexes(i) = i
-enddo
-! queue_details is addressed by label (the lattice process index)
-! This is done to avoid queue_details being involved in too many 
-! swap operations when (re)sorting the queue. It will be involved
-! however in relabelling (when deleting a process).
-do i = 1,this%nsize
-    this%queue_details(labels(i)) = details(i)
 enddo
 
 call heap_fullsort(this)
@@ -184,24 +163,19 @@ end subroutine heap_fullsort
 
 !@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 
-subroutine heap_update_element(this,updated_element_label,updated_element_value,updated_element_details)
+subroutine heap_update_element(this,updated_element_label,updated_element_value)
 
 implicit none
 
 class(ProcessQueueBinaryHeap_Type), intent(inout) :: this
 integer, intent(in) ::  updated_element_label
 real(8), intent(in) ::  updated_element_value
-type(QProcessDetails_Type), intent(in), optional ::  updated_element_details
 
 integer indx, newindx
 logical boolv1, boolv2, boolv3, boolv4
 
 ! This subroutine updates item with label updated_element_label
 ! and resorts the heap (using partial sorting)
-
-if (present(updated_element_details)) then
-    this%queue_details(updated_element_label) = updated_element_details
-endif
 
 indx = this%array_indexes(updated_element_label)
 
@@ -300,8 +274,8 @@ if ( (indx <= this%nsize) .and. (indx >= 1) ) then
     endif
     
 else 
-	call this%error(888013,moreinfo='Element with label ' // &
-	int2str(updated_element_label) // ' cannot be updated.')
+   call this%error(888013,moreinfo='Element with label ' // &
+   int2str(updated_element_label) // ' cannot be updated.')
 endif
 
 return
@@ -427,20 +401,18 @@ if ( (indx <= this%nsize) .and. (indx >= 1) ) then
     this%array_indexes(removed_element_label) = 0
     this%queue_elements(this%nsize) = 0
     this%heap_labels(this%nsize) = 0
-	! Don't forget that queue_details is indexed by labels:
-    this%queue_details(removed_element_label) = nullProcessDetails()
 
-	! Relabel if necessary: the last label will now take the removed label to avoid "holes"
-	! (gaps) in the labelling system...
+   ! Relabel if necessary: the last label will now take the removed label to avoid "holes"
+   ! (gaps) in the labelling system...
     if (this%nsize /= removed_element_label) then
-	    call this%relabel(this%nsize,removed_element_label)
+       call this%relabel(this%nsize,removed_element_label)
     endif
     
     this%nsize = this%nsize - 1
 
 else 
-	call this%error(888013,'Element with label ' // &
-	trim(int2str(removed_element_label)) // ' cannot be removed.')
+   call this%error(888013,'Element with label ' // &
+   trim(int2str(removed_element_label)) // ' cannot be removed.')
 endif
 
 return
@@ -448,24 +420,16 @@ end subroutine heap_remove_element
 
 !@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 
-subroutine heap_insert_element(this,inserted_element,inserted_details_in)
+subroutine heap_insert_element(this,inserted_element)
 
 class(ProcessQueueBinaryHeap_Type), intent(inout) :: this
 real(8), intent(in) :: inserted_element
-type(QProcessDetails_Type), optional :: inserted_details_in
 
 integer inserted_label
-type(QProcessDetails_Type) :: inserted_details
-
-if (present(inserted_details_in)) then
-	inserted_details = inserted_details_in
-else
-	inserted_details = nullProcessDetails()
-endif
 
 inserted_label = this%nsize + 1
 
-call heap_insert_element_with_explicit_label(this,inserted_element,inserted_label,inserted_details)
+call heap_insert_element_with_explicit_label(this,inserted_element,inserted_label)
 
 return
 
@@ -473,26 +437,25 @@ end subroutine heap_insert_element
 
 !@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 
-subroutine heap_insert_element_with_explicit_label(this,inserted_element,inserted_label,inserted_details)
+subroutine heap_insert_element_with_explicit_label(this,inserted_element,inserted_label)
 
 implicit none
 
 class(ProcessQueueBinaryHeap_Type), intent(inout) :: this
 integer, intent(in) :: inserted_label
 real(8), intent(in) :: inserted_element
-type(QProcessDetails_Type), intent(in) :: inserted_details
 
 integer indx
 
 indx = this%nsize + 1
 
 if (indx > size(this%queue_elements)) then
-	call this%error(888014,'Occurred when trying to add one more element ' // &
-			'in a heap of size ' // trim(int2str(size(this%queue_elements))) // '.')
+   call this%error(888014,'Occurred when trying to add one more element ' // &
+         'in a heap of size ' // trim(int2str(size(this%queue_elements))) // '.')
 endif
 if (this%array_indexes(inserted_label) /= 0) then
-	call this%error(888016,'Occurred when trying to add one more element ' // &
-			'with the already used label ' // trim(int2str(inserted_label)) // '.')
+   call this%error(888016,'Occurred when trying to add one more element ' // &
+         'with the already used label ' // trim(int2str(inserted_label)) // '.')
 endif
 
 do while (indx > 1)
@@ -518,30 +481,11 @@ this%queue_elements(indx) = inserted_element
 this%heap_labels(indx) = inserted_label
 this%array_indexes(this%heap_labels(indx)) = indx
 
-this%queue_details(inserted_label) = inserted_details
-
 this%nsize = this%nsize + 1
 
 end subroutine heap_insert_element_with_explicit_label
 
-!@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@	  
-
-function heap_get_details_of_element(this,req_element_label)
-
-implicit none
-
-type(QProcessDetails_Type) :: heap_get_details_of_element
-
-class(ProcessQueueBinaryHeap_Type), intent(inout) :: this
-integer, intent(in) ::  req_element_label
-
-heap_get_details_of_element = this%queue_details(req_element_label)
-
-return
-
-end function heap_get_details_of_element
-
-!@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@	  
+!@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@   
 
 real(8) function heap_get_key_value_of_element(this,req_element_label)
 
@@ -550,13 +494,18 @@ implicit none
 class(ProcessQueueBinaryHeap_Type), intent(inout) :: this
 integer, intent(in) ::  req_element_label
 
+if (req_element_label == 0) then
+    heap_get_key_value_of_element = huge(1.d0)
+    return
+endif
+
 heap_get_key_value_of_element = this%queue_elements(this%array_indexes(req_element_label))
 
 return
 
 end function heap_get_key_value_of_element
 
-!@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@	  
+!@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@   
 
 integer function heap_get_label_of_highest_priority_element(this)
 
@@ -570,7 +519,7 @@ return
 
 end function heap_get_label_of_highest_priority_element
 
-!@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@	  
+!@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@   
 
 subroutine heap_relabel(this,cur_element_label,new_element_label)
 
@@ -587,19 +536,16 @@ integer, intent(in) ::  new_element_label, cur_element_label
 
 if (this%array_indexes(new_element_label) /= 0) then
 
-	call this%error(888015,'Attempted to re-label element with label ' // &
-	trim(int2str(cur_element_label)) // ' but the new label ' // &
-	trim(int2str(new_element_label)) // ' is already in use.')
+   call this%error(888015,'Attempted to re-label element with label ' // &
+   trim(int2str(cur_element_label)) // ' but the new label ' // &
+   trim(int2str(new_element_label)) // ' is already in use.')
 
 else
 
     this%heap_labels(this%array_indexes(cur_element_label)) = new_element_label
     this%array_indexes(new_element_label) = this%array_indexes(cur_element_label)
     this%array_indexes(cur_element_label) = 0
-    
-	this%queue_details(new_element_label) = this%queue_details(cur_element_label)
-	this%queue_details(cur_element_label) = nullProcessDetails()
-	
+      
 endif
 
 end subroutine heap_relabel
@@ -619,8 +565,8 @@ do indx = 1,this%nsize
     if (elem_left_child(indx) <= this%nsize) then
 
         if ( has_priority(this%queue_elements(elem_left_child(indx)),this%queue_elements(indx)) ) then
-			call this%error(888050,'Problem in heap node with index ' // trim(int2str(indx)) // &
-			': incorrect sorting - right left has priority!')
+         call this%error(888050,'Problem in heap node with index ' // trim(int2str(indx)) // &
+         ': incorrect sorting - right left has priority!')
         endif
 
     endif
@@ -628,24 +574,24 @@ do indx = 1,this%nsize
     if (elem_right_child(indx) <= this%nsize) then
 
         if ( has_priority(this%queue_elements(elem_right_child(indx)),this%queue_elements(indx)) ) then
-			call this%error(888050,'Problem in heap node with index ' // trim(int2str(indx)) // &
-			': incorrect sorting - right child has priority!')
+         call this%error(888050,'Problem in heap node with index ' // trim(int2str(indx)) // &
+         ': incorrect sorting - right child has priority!')
         endif
 
     endif
 
     if (this%array_indexes(this%heap_labels(indx)) /= indx) then
-			call this%error(888050,'Problem in heap node with label ' // &
-			trim(int2str(this%heap_labels(indx))) // ': inverse index mapping returns ' // &
+         call this%error(888050,'Problem in heap node with label ' // &
+         trim(int2str(this%heap_labels(indx))) // ': inverse index mapping returns ' // &
             trim(int2str(this%array_indexes(indx))) // ' which is not the actual index ' // &
-			trim(int2str(indx)) // '!')
+         trim(int2str(indx)) // '!')
     endif
     
 enddo
 
 return
 
-end subroutine heap_check_status	  
+end subroutine heap_check_status   
 
 !@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 
@@ -734,40 +680,46 @@ select case (ierror)
 
     case (888001)
         write(errorout,'(/,a)') 'Internal error code ' // trim(int2str(ierror)) // &
-		': in heap constructor the size of values must be equal to size of labels.'
+      ': in heap constructor the size of values must be equal to size of labels.'
     case (888002)
         write(errorout,'(/,a)') 'Internal error code ' // trim(int2str(ierror)) // &
-		': in heap constructor the size of values must be equal to size of details.'
+      ': in heap constructor the size of values must be equal to size of details.'
     case (888003)
         write(errorout,'(/,a)') 'Internal error code ' // trim(int2str(ierror)) // &
-		': in heap constructor labels must be an array of consecutive integers from 1 to size(values).'
+      ': in heap constructor labels must be an array of consecutive integers from 1 to size(values).'
         write(errorout,'(/,a)') 'More information: '
         write(errorout,'(a)') trim(moreinfo)
     case (888013)
         write(errorout,'(/,a)') 'Internal error code ' // trim(int2str(ierror)) // &
-		': label provided does not point to an element in the heap!'
+      ': label provided does not point to an element in the heap!'
         write(errorout,'(/,a)') 'More information: '
         write(errorout,'(a)') trim(moreinfo)
     case (888014)
         write(errorout,'(/,a)') 'Internal error code ' // trim(int2str(ierror)) // &
-		': heap maxed out!'
+      ': heap maxed out!'
         write(errorout,'(/,a)') 'More information: '
         write(errorout,'(a)') trim(moreinfo)
     case (888015)
         write(errorout,'(/,a)') 'Internal error code ' // trim(int2str(ierror)) // &
-		': re-labeling not allowed: new label already in use.'
+      ': re-labeling not allowed: new label already in use.'
         write(errorout,'(/,a)') 'More information: '
         write(errorout,'(a)') trim(moreinfo)
     case (888016)
         write(errorout,'(/,a)') 'Internal error code ' // trim(int2str(ierror)) // &
-		': insertion not allowed: new label already in use.'
+      ': insertion not allowed: new label already in use.'
         write(errorout,'(/,a)') 'More information: '
         write(errorout,'(a)') trim(moreinfo)
     case (888050)
         write(errorout,'(/,a)') 'Internal error code ' // trim(int2str(ierror)) // &
-		': heap did not pass self-consistency test.'
+      ': heap did not pass self-consistency test.'
         write(errorout,'(/,a)') 'More information: '
         write(errorout,'(a)') trim(moreinfo)
+    case (881060)
+        write(errorout,'(/,a)') 'Internal error code ' // trim(int2str(ierror)) // &
+      ': attempted to save heap restart information but failed.'
+    case (881061)
+        write(errorout,'(/,a)') 'Internal error code ' // trim(int2str(ierror)) // &
+      ': attempted to load heap restart information but failed.'
 
     case default
         write(errorout,'(/,a)') 'Error - Unspecified error code.'
@@ -782,6 +734,69 @@ flush(iwrite)
 stop
 
 end subroutine heap_error
+
+!@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+subroutine heap_save_restart_info(this,irestart)
+
+implicit none
+
+class(ProcessQueueBinaryHeap_Type), intent(inout) :: this
+integer, intent(in) :: irestart
+integer i
+
+write(irestart,'(2I10)',err=100) this%nsize, size(this%queue_elements)
+
+do i = 1,this%nsize
+    write(irestart,'(2I10,ES32.16E3)',err=100) &
+        this%heap_labels(i), this%array_indexes(i), this%queue_elements(i)
+enddo
+
+return
+
+100 call this%error(881060)
+
+end subroutine heap_save_restart_info
+
+!@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+subroutine heap_load_restart_info(this,irestart)
+
+implicit none
+
+class(ProcessQueueBinaryHeap_Type), intent(inout) :: this
+integer, intent(in) :: irestart
+integer i, io, nsize, n0
+character(256) buf256
+character(256) recinput
+
+read(irestart,'(2I10)',err=101) nsize, n0
+
+call this%initialize(n0)
+this%nsize = nsize
+
+recinput = ' '
+buf256 = ' '
+
+do i = 1,this%nsize
+    read(irestart,'(a' // int2str(len(recinput)) // ')', iostat = io) recinput
+    buf256 = recinput(20+1:20+32)
+    call remove_leading_blanks(buf256)
+    if (striccompare(trim(buf256),'inf') .or. striccompare(trim(buf256),'infinity')) then
+        ! MA -- not portable. Replacing with large number.
+        this%queue_elements(i) = huge(1.d0)
+    else
+        read(recinput,'(2I10,ES32.16E3)',err=101) &
+            this%heap_labels(i), this%array_indexes(i), this%queue_elements(i)
+    endif
+    
+enddo
+
+return
+
+101 call this%error(881061)
+
+end subroutine heap_load_restart_info
 
 !@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 
