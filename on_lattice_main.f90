@@ -10,15 +10,15 @@ program on_lattice_MAIN
    real*8    :: t_kmc, t, dt, t1, t2, cov, ts, tf
    integer   :: i, j, iters, reaction_occured, Ldim, seed(33)=999
    call random_seed(PUT=seed) ! seed is fixed, every run produces the same random number sequence
-   call cpu_time(ts) !-----------------global start time----------------
+!~    call cpu_time(ts) !-----------------global start time----------------
    write_file= 'lattice.txt'
-   write(*,*) 'Give lattice Dimension and # of iterations:'
-   read*, Ldim, iters
+   write(*,*) 'Give lattice Dimension and # of iterations:. AND method: 1, linVec, 2 heap'
+   read*, Ldim, iters, i
 !~    Ldim = 100
 !~    iters = 20
    cov = 0.00 ! fractional lattice coverage: cov ∈ [0, 1]
-   write(*,*) 'Which queuing system you want to use? 1 for linear vector, 2 for binary heap:'
-   read*, i
+!~    write(*,*) 'Which queuing system you want to use? 1 for linear vector, 2 for binary heap:'
+!~    read*, i
    
    select case (i)
    case (1)
@@ -39,26 +39,29 @@ program on_lattice_MAIN
    do j=1, Ldim
       write(88,*) lattice(j,:)
    enddo
+   call cpu_time(ts)
    do i=1, iters
 !~       call find_using_sums_tree(queue_struct,dt, reaction_occured)
 !~       t = t + dt
       call find_using_execution_queue(queue_struct,t_kmc, reaction_occured)
 
-      if (mod(i,1000) == 0) then
-          print*,i, t_kmc, reaction_occured!, char(10)
-      endif
-      call cpu_time(t1)
+!~       if (mod(i,1000) == 0) then
+!~           print*,i, t_kmc, reaction_occured!, char(10)
+!~       endif
+!~       call cpu_time(t1)
       call execute_reaction(queue_struct,reaction_occured,t_kmc)
-      call cpu_time(t2)
+!~       call cpu_time(t2)
 !~       print*,"time to EXEC next reaction: ",t2-t1
 !~       print*,"a0 AFTER reaction execution:",reaction_occured, queue_struct%tree_elements(sums_tree%head_node_indx)
-       if (mod(i,5000)==0) then
-         do j=1, Ldim
-            write(88,*) lattice(j,:)
-         enddo
-       endif
+!~        if (mod(i,5000)==0) then
+!~          do j=1, Ldim
+!~             write(88,*) lattice(j,:)
+!~          enddo
+!~        endif
    enddo
    call cpu_time(tf) !-----------------global finish time---------------
+   open(unit=99,file='stats', position='append')
+   write(99,*) Ldim*Ldim, iters, tf-ts
    print*,"Total time: ",tf-ts, " seconds"
    
 contains
