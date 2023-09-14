@@ -1,29 +1,29 @@
 module lattice_KMC
-
    use execution_queue
    implicit none
-   integer                               :: Ns, c, empty, occupied
-   integer,  allocatable, dimension(:)   :: reaction_effect
+   integer                               :: Ns
    integer,  allocatable, dimension(:,:) :: lattice, coords, neighbours
-   real*8,   allocatable, dimension(:)   :: reaction_const
+   real*8,   allocatable, dimension(:)   :: times
    real*8,   allocatable, dimension(:,:) :: propensities
-   integer*8,allocatable, dimension(:)   :: h
-   real*8                                :: ads_const  = 5., des_const= 5.
-   real*8                                :: diff_const = 20.
+   real*8                                :: ads_const, des_const, diff_const
 
 contains
-   subroutine init(queue_struct,n,percentage)
+   subroutine init(queue_struct,n,percentage,ads_coeff,des_coeff,diff_coeff)
       implicit none
 !~       type(PropensPartialSums_Type) :: queue_struct
       class(ProcessQueue_Type) ::  queue_struct
       integer :: n!, i
-      real*8  :: percentage
+      real*8  :: percentage, ads_coeff, des_coeff, diff_coeff
 
       Ns = n*n ! total number of sites
-
+      ads_const = ads_coeff
+      des_const = des_coeff
+      diff_const= diff_coeff
+      
       allocate(lattice(n,n))
       allocate(coords(Ns,2))
       allocate(neighbours(Ns,4))
+      allocate(times(6*Ns))            ! will store ALL reaction times
       allocate(propensities(Ns,6))
       
       call queue_struct%initialize(6*Ns)
@@ -125,12 +125,16 @@ contains
       implicit none
       class(ProcessQueue_Type) ::  queue_struct
       real*8, dimension(6) :: rand_nums
+      real*8  :: t
       integer :: i,j
       ! binary heap stores the occurence times of the events.
       do i=1, Ns ! insert(inserted_element,inserted_details_in (OPTIONAL) )
          call random_number(rand_nums)
          do j=1,6
-            call queue_struct%insert(-LOG(rand_nums(j)) / propensities(i,j))
+!            call queue_struct % insert(-LOG(rand_nums(j)) / propensities(i,j))
+            t = -LOG(rand_nums(j)) / propensities(i,j)
+            times( label(i,j) ) = t
+            call queue_struct % insert_explicit(t, label(i,j) )
          enddo
       enddo
    end
@@ -139,25 +143,35 @@ contains
       implicit none
       class(ProcessQueue_Type) ::  queue_struct
       real*8, dimension(-1:9,4) :: rand_nums
-      real*8  :: t_kmc
+      real*8  :: t_kmc, t_new1, t_new2
       integer :: i,j, site_or, site_des
       call random_number(rand_nums)
-      do i=1,4 ! update origin & destination propensities 
-         call queue_struct%update((site_or -1)*6 + i, t_kmc - LOG(rand_nums(-1,i)) / propensities(site_or, i))
-         call queue_struct%update((site_des-1)*6 + i, t_kmc - LOG(rand_nums( 0,i)) / propensities(site_des,i))
+      do i=1,4 ! update origin & destination DIFFUSION propensities
+         t_new1 = t_kmc - LOG(rand_nums(-1,i)) / propensities(site_or, i)
+         t_new2 = t_kmc - LOG(rand_nums( 0,i)) / propensities(site_des,i)
+         call queue_struct%update(label(site_or ,i), t_new1)
+         call queue_struct%update(label(site_des,i), t_new2)
          do j=1,4 ! update neighbours of origin & destination sites
-            call queue_struct%update((neighbours(site_or, j)-1)*6+i, &
-            t_kmc - LOG(rand_nums(2*j-1,i)) / propensities(neighbours(site_or, j),i) )
-            call queue_struct%update((neighbours(site_des,j)-1)*6+i, &
-            t_kmc - LOG(rand_nums(2*j  ,i)) / propensities(neighbours(site_des,j),i) )
+            t_new1 = t_kmc - LOG(rand_nums(2*j-1,i)) / propensities(neighbours(site_or, j),i)
+            t_new2 = t_kmc - LOG(rand_nums(2*j  ,i)) / propensities(neighbours(site_des,j),i)
+            call queue_struct%update((neighbours(site_or, j)-1)*6+i, t_new1)
+            call queue_struct%update((neighbours(site_des,j)-1)*6+i, t_new2)
          enddo
       enddo
       do i=5,6 ! update AD & DES propensities of origin and destination sites
          j = i-4 ! j=1,2
-         call queue_struct%update((site_or -1)*6+i, t_kmc - LOG(rand_nums(9, 2*j-1)) / propensities(site_or, i) ) ! rands = (9,1) (9,3)
-         call queue_struct%update((site_des-1)*6+i, t_kmc - LOG(rand_nums(9, 2*j  )) / propensities(site_des,i) ) ! rands = (9,2) (9,4)
+         t_new1 = t_kmc - LOG(rand_nums(9, 2*j-1)) / propensities(site_or, i)
+         t_new2 = t_kmc - LOG(rand_nums(9, 2*j  )) / propensities(site_des,i)
+
+         call queue_struct % update(label(site_or ,i), t_new1) ! rands = (9,1) (9,3)
+         call queue_struct % update(label(site_des,i), t_new2) ! rands = (9,2) (9,4)
+
+         times(label(site_or ,i)) = t_new1
+         times(label(site_des,i)) = t_new2
       enddo
    end
+
+!------------------Subroutines to handle lattice-private data structures
 
    subroutine check_permitted_diffusions(site_of_interest)
       implicit none
@@ -236,9 +250,15 @@ contains
       do i=1, Ns ! fill coords array
          coords(i,1) = mod( i-1,n)  + 1 ! row of i-lattice site
          coords(i,2) = int((i-1)/n) + 1 ! col of i-lattice site
-      enddo      
+      enddo
    end
-   
+
+   integer function label(l_site, r_type)
+      implicit none
+      integer, intent(in) :: l_site, r_type
+      label = (l_site-1)*6 + r_type
+   end
+
    subroutine randomize_coverage(covrg)
       implicit none
       integer :: i,j, site, c
@@ -260,7 +280,7 @@ contains
          print*,"Initially Occupied: ", c, " out of", Ns
          do i=1, c ! insert c sites in lattice
             site = rand_positions(i)
-!~             print*,"Site Occupied: ", site
+            print*,"Site Occupied: ", site
             lattice(coords(site,1), coords(site,2)) = 1
             call check_permitted_diffusions(site)
             propensities(site, 5) = des_const ! DEsorption is  enabled
@@ -268,5 +288,13 @@ contains
          enddo
       endif
    end
+
+   subroutine cleanAll(queue_struct)
+      implicit none
+      class(ProcessQueue_Type) ::  queue_struct
+      
+      deallocate(lattice,coords,neighbours,propensities,times)
+!      call deletePH(queue_struct)
+   end subroutine
 
 end module lattice_KMC

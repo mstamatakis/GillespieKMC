@@ -1,24 +1,22 @@
 program on_lattice_MAIN
-   use lattice_KMC
-   use execution_queue
    use execution_queue_binary_heap
+   use lattice_KMC
    implicit none
 !~    type(PropensPartialSums_Type) :: queue_struct
    class(ProcessQueue_Type), allocatable ::  queue_struct
-   
    character(len=20) :: write_file
-   real*8    :: t_kmc, t, dt, t1, t2, cov, ts, tf
-   integer   :: i, j, iters, reaction_occured, Ldim, seed(33)=999
-   call random_seed(PUT=seed) ! seed is fixed, every run produces the same random number sequence
+   real*8    :: t_kmc, t, dt, t1, t2, cov, ts, tf, ads_coeff, des_coeff, diff_coeff
+   integer   :: i, j, iters, reaction_occured, Ldim, seed(33)=101
+   call random_seed(PUT=seed)
 !~    call cpu_time(ts) !-----------------global start time----------------
+
    write_file= 'lattice.txt'
    write(*,*) 'Give lattice Dimension and # of iterations:. AND method: 1, linVec, 2 heap'
    read*, Ldim, iters, i
-!~    Ldim = 100
-!~    iters = 20
-   cov = 0.00 ! fractional lattice coverage: cov ∈ [0, 1]
-!~    write(*,*) 'Which queuing system you want to use? 1 for linear vector, 2 for binary heap:'
-!~    read*, i
+   cov = 0.5
+   ads_coeff = 1.0
+   des_coeff = 1.0
+   diff_coeff= 5.0
    
    select case (i)
    case (1)
@@ -30,23 +28,24 @@ program on_lattice_MAIN
        stop
    end select
    
-   call init(queue_struct,Ldim,cov)
+   call init(queue_struct,Ldim,cov,ads_coeff,des_coeff,diff_coeff)
    t_kmc = 0
    reaction_occured=-1
 !~    print*,"START:", reaction_occured, "a0 = ", queue_struct%tree_elements(queue_struct%head_node_indx)
-   print*,"START:", reaction_occured ! a0 does not exist in Binary Heap
-   open(unit=88,file=write_file)
-   do j=1, Ldim
-      write(88,*) lattice(j,:)
-   enddo
+!   print*,"START:", reaction_occured ! a0 does not exist in Binary Heap
+!   open(unit=88,file=write_file, RECL=1024)
+!   do j=1, Ldim
+!      write(88,*) lattice(j,:)
+!   enddo
+!   open(unit=55,file='reaction_history_BH.txt')
    call cpu_time(ts)
    do i=1, iters
 !~       call find_using_sums_tree(queue_struct,dt, reaction_occured)
 !~       t = t + dt
       call find_using_execution_queue(queue_struct,t_kmc, reaction_occured)
-
+!      write(55,*) reaction_occured, t_kmc
 !~       if (mod(i,1000) == 0) then
-!~           print*,i, t_kmc, reaction_occured!, char(10)
+          print*,i, t_kmc, reaction_occured!, char(10)
 !~       endif
 !~       call cpu_time(t1)
       call execute_reaction(queue_struct,reaction_occured,t_kmc)
@@ -54,15 +53,21 @@ program on_lattice_MAIN
 !~       print*,"time to EXEC next reaction: ",t2-t1
 !~       print*,"a0 AFTER reaction execution:",reaction_occured, queue_struct%tree_elements(sums_tree%head_node_indx)
 !~        if (mod(i,5000)==0) then
-!~          do j=1, Ldim
-!~             write(88,*) lattice(j,:)
-!~          enddo
+!         write(88,*) " "
+!         do j=1, Ldim
+!            write(88,*) lattice(j,:)
+!         enddo
 !~        endif
    enddo
    call cpu_time(tf) !-----------------global finish time---------------
-   open(unit=99,file='stats', position='append')
-   write(99,*) Ldim*Ldim, iters, tf-ts
+
+   open(unit=77,file='stats.txt',position='append')
+   write(77,*) Ldim*Ldim, iters, tf-ts
    print*,"Total time: ",tf-ts, " seconds"
+   print*,"KMC time reached:", t_kmc
+   
+   open(unit=101,file='KMC_stats.txt',position='append')
+   write(101,*) Ldim, Ldim*Ldim, iters, t_kmc
    
 contains
 
